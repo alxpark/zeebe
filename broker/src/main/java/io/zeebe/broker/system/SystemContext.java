@@ -9,7 +9,6 @@ package io.zeebe.broker.system;
 
 import static io.zeebe.broker.system.partitions.impl.AsyncSnapshotDirector.MINIMUM_SNAPSHOT_PERIOD;
 
-import io.atomix.storage.StorageLevel;
 import io.zeebe.broker.Loggers;
 import io.zeebe.broker.system.configuration.BrokerCfg;
 import io.zeebe.broker.system.configuration.ClusterCfg;
@@ -76,13 +75,7 @@ public final class SystemContext {
       throw new IllegalArgumentException(String.format(NODE_ID_ERROR_MSG, nodeId, clusterSize));
     }
 
-    final StorageLevel storageLevel = data.getAtomixStorageLevel();
     final int replicationFactor = cluster.getReplicationFactor();
-
-    if (storageLevel == StorageLevel.MAPPED && replicationFactor > 1) {
-      throw new IllegalStateException(MMAP_REPLICATION_ERROR_MSG);
-    }
-
     if (replicationFactor < 1 || replicationFactor > clusterSize) {
       throw new IllegalArgumentException(
           String.format(REPLICATION_FACTOR_ERROR_MSG, replicationFactor, clusterSize));
