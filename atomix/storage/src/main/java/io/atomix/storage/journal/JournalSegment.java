@@ -209,10 +209,15 @@ public class JournalSegment<E> implements AutoCloseable {
    */
   MappableJournalSegmentReader<E> createReader() {
     checkOpen();
+    final var channel = openChannel(file.file());
     final MappableJournalSegmentReader<E> reader =
-        new MappableJournalSegmentReader<>(
-            openChannel(file.file()), this, maxEntrySize, index, namespace);
-    final MappedByteBuffer buffer = writer.buffer();
+        new MappableJournalSegmentReader<>(channel, this, maxEntrySize, index, namespace);
+    final MappedByteBuffer buffer;
+    try {
+      buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, descriptor().maxSegmentSize());
+    } catch (final IOException e) {
+      throw new StorageException(e);
+    }
     if (buffer != null) {
       reader.map(buffer);
     }
