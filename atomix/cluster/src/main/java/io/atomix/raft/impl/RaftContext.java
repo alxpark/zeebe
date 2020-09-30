@@ -114,7 +114,6 @@ public class RaftContext implements AutoCloseable {
   private volatile boolean started;
   private EntryValidator entryValidator;
 
-  @SuppressWarnings("unchecked")
   public RaftContext(
       final String name,
       final MemberId localMemberId,
@@ -281,7 +280,7 @@ public class RaftContext implements AutoCloseable {
       listener.accept(this.state);
     } else {
       addStateChangeListener(
-          new Consumer<State>() {
+          new Consumer<>() {
             @Override
             public void accept(final State state) {
               listener.accept(state);
@@ -350,6 +349,9 @@ public class RaftContext implements AutoCloseable {
     if (commitIndex > previousCommitIndex) {
       this.commitIndex = commitIndex;
       logWriter.commit(Math.min(commitIndex, logWriter.getLastIndex()));
+      if (raftLog.isFlushOnCommit() && isLeader()) {
+        logWriter.flush();
+      }
       final long configurationIndex = cluster.getConfiguration().index();
       if (configurationIndex > previousCommitIndex && configurationIndex <= commitIndex) {
         cluster.commit();
@@ -389,7 +391,7 @@ public class RaftContext implements AutoCloseable {
         () -> {
           // Register a leader election listener to wait for the election of this node.
           final Consumer<RaftMember> electionListener =
-              new Consumer<RaftMember>() {
+              new Consumer<>() {
                 @Override
                 public void accept(final RaftMember member) {
                   if (member.memberId().equals(cluster.getMember().memberId())) {
