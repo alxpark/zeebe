@@ -172,7 +172,7 @@ public class JournalSegment<E> implements AutoCloseable {
   /** Releases a reference to the log segment. */
   void release() {
     if (references.decrementAndGet() == 0 && open) {
-      unmap();
+      // unmap();
     }
   }
 
@@ -185,7 +185,7 @@ public class JournalSegment<E> implements AutoCloseable {
   }
 
   /** Unmaps the log segment from memory. */
-  private void unmap() {
+  void unmap() {
     if (storageLevel == StorageLevel.MAPPED) {
       writer.unmap();
       readers.forEach(reader -> reader.unmap());
@@ -264,6 +264,7 @@ public class JournalSegment<E> implements AutoCloseable {
   /** Deletes the segment. */
   public void delete() {
     try {
+      unmap();
       Files.deleteIfExists(file.file().toPath());
     } catch (final IOException e) {
       throw new StorageException(e);
