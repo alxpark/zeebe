@@ -26,7 +26,6 @@ import io.atomix.storage.journal.index.JournalIndex;
 import io.atomix.utils.serializer.Namespace;
 import java.io.File;
 import java.io.IOException;
-import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
@@ -172,15 +171,14 @@ public class JournalSegment<E> implements AutoCloseable {
   /** Releases a reference to the log segment. */
   void release() {
     if (references.decrementAndGet() == 0 && open) {
-      // unmap();
+      unmap();
     }
   }
 
   /** Maps the log segment into memory. */
   private void map() {
     if (storageLevel == StorageLevel.MAPPED) {
-      final MappedByteBuffer buffer = writer.map();
-      readers.forEach(reader -> reader.map(buffer));
+      readers.forEach(MappableJournalSegmentReader::map);
     }
   }
 
@@ -188,7 +186,7 @@ public class JournalSegment<E> implements AutoCloseable {
   void unmap() {
     if (storageLevel == StorageLevel.MAPPED) {
       writer.unmap();
-      readers.forEach(reader -> reader.unmap());
+      readers.forEach(MappableJournalSegmentReader::unmap);
     }
   }
 
@@ -211,16 +209,14 @@ public class JournalSegment<E> implements AutoCloseable {
     checkOpen();
     final var channel = openChannel(file.file());
     final MappableJournalSegmentReader<E> reader =
-        new MappableJournalSegmentReader<>(channel, this, maxEntrySize, index, namespace);
-    final MappedByteBuffer buffer;
-    try {
-      buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, descriptor().maxSegmentSize());
-    } catch (final IOException e) {
-      throw new StorageException(e);
-    }
-    if (buffer != null) {
-      reader.map(buffer);
-    }
+        new MappableJournalSegmentReader<>(
+            channel,
+            this,
+            maxEntrySize,
+            index,
+            namespace,
+            storageLevel,
+            descriptor.maxSegmentSize());
     readers.add(reader);
     return reader;
   }

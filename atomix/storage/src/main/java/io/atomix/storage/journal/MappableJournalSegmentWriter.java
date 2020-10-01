@@ -75,18 +75,8 @@ class MappableJournalSegmentWriter<E> implements JournalWriter<E> {
   void unmap() {
     if (writer instanceof MappedJournalSegmentWriter) {
       final JournalWriter<E> writer = this.writer;
-      this.writer =
-          new FileChannelJournalSegmentWriter<>(channel, segment, maxEntrySize, index, namespace);
       writer.close();
     }
-  }
-
-  MappedByteBuffer buffer() {
-    final JournalWriter<E> writer = this.writer;
-    if (writer instanceof MappedJournalSegmentWriter) {
-      return ((MappedJournalSegmentWriter<E>) writer).buffer();
-    }
-    return null;
   }
 
   /**

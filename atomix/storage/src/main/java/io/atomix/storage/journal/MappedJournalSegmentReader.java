@@ -16,9 +16,12 @@
  */
 package io.atomix.storage.journal;
 
+import io.atomix.storage.StorageException;
 import io.atomix.storage.journal.index.JournalIndex;
 import io.atomix.storage.journal.index.Position;
+import io.atomix.utils.memory.BufferCleaner;
 import io.atomix.utils.serializer.Namespace;
+import java.io.IOException;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.util.NoSuchElementException;
@@ -141,11 +144,14 @@ class MappedJournalSegmentReader<E> implements JournalReader<E> {
 
   @Override
   public void close() {
-    // Do nothing. The writer is responsible for cleaning the mapped buffer.
+    try {
+      BufferCleaner.freeBuffer(buffer);
+    } catch (final IOException e) {
+      throw new StorageException(e);
+    }
   }
 
   /** Reads the next entry in the segment. */
-  @SuppressWarnings("unchecked")
   private void readNext() {
     // Compute the index of the next entry in the segment.
     final long index = getNextIndex();
