@@ -1,6 +1,6 @@
 // vim: set filetype=groovy:
 
-@Library(["camunda-ci", "zeebe-jenkins-shared-library"]) _
+@Library(["camunda-ci", "zeebe-jenkins-shared-library@korthout-has-build-changed"]) _
 
 def buildName = "${env.JOB_BASE_NAME.replaceAll("%2F", "-").replaceAll("\\.", "-").take(20)}-${env.BUILD_ID}"
 
@@ -294,28 +294,7 @@ pipeline {
                     return
                 }
 
-                echo "Looking for most recent non-aborted previous build"
-                def previousBuild = currentBuild.previousBuild
-                while(previousBuild != null && previousBuild.result == 'ABORTED') {
-                    echo "Skipping over an aborted build ${previousBuild.fullDisplayName}"
-                    previousBuild = previousBuild.previousBuild
-                }
-                def shouldSendSlack = false
-                if (previousBuild == null) {
-                    echo "No previous non-aborted builds found"
-                    shouldSendSlack = true
-                } else {
-                  if (previousBuild.result == 'FAILURE' && currentBuild.currentResult == 'SUCCESS') {
-                    echo "Build is fixed"
-                    shouldSendSlack = true
-                  }
-                  if (previousBuild.result == 'SUCCESS' && currentBuild.currentResult == 'FAILURE') {
-                    echo 'Build has regressed'
-                    shouldSendSlack = true
-                  }
-                }
-
-                if (shouldSendSlack) {
+                if (hasBuildChanged()) {
                     echo "Send slack message"
                     slackSend(
                         channel: "#zeebe-ci-test",
