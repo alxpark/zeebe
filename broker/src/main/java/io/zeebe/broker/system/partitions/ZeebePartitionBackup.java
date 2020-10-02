@@ -11,15 +11,21 @@ import static io.zeebe.engine.state.DefaultZeebeDbFactory.DEFAULT_DB_METRIC_EXPO
 
 import io.atomix.raft.RaftRoleChangeListener;
 import io.atomix.raft.RaftServer.Role;
+import io.atomix.raft.partition.RaftPartition;
 import io.atomix.raft.storage.log.RaftLogReader;
 import io.atomix.storage.journal.JournalReader.Mode;
 import io.zeebe.broker.Loggers;
+import io.zeebe.broker.PartitionListener;
+import io.zeebe.broker.exporter.jar.ExporterJarLoadException;
+import io.zeebe.broker.exporter.repo.ExporterLoadException;
+import io.zeebe.broker.exporter.repo.ExporterRepository;
 import io.zeebe.broker.exporter.stream.ExporterDirector;
 import io.zeebe.broker.exporter.stream.ExporterDirectorContext;
 import io.zeebe.broker.logstreams.AtomixLogCompactor;
 import io.zeebe.broker.logstreams.LogCompactor;
 import io.zeebe.broker.logstreams.LogDeletionService;
 import io.zeebe.broker.logstreams.state.StatePositionSupplier;
+import io.zeebe.broker.system.configuration.BrokerCfg;
 import io.zeebe.broker.system.configuration.DataCfg;
 import io.zeebe.broker.system.monitoring.DiskSpaceUsageListener;
 import io.zeebe.broker.system.monitoring.HealthMetrics;
@@ -28,6 +34,7 @@ import io.zeebe.broker.system.partitions.impl.AtomixRecordEntrySupplierImpl;
 import io.zeebe.broker.system.partitions.impl.NoneSnapshotReplication;
 import io.zeebe.broker.system.partitions.impl.StateControllerImpl;
 import io.zeebe.broker.system.partitions.impl.StateReplication;
+import io.zeebe.broker.transport.commandapi.CommandApiService;
 import io.zeebe.db.ZeebeDb;
 import io.zeebe.db.impl.rocksdb.ZeebeRocksDBMetricExporter;
 import io.zeebe.engine.processing.streamprocessor.StreamProcessor;
@@ -35,6 +42,9 @@ import io.zeebe.engine.state.DefaultZeebeDbFactory;
 import io.zeebe.engine.state.ZeebeState;
 import io.zeebe.logstreams.log.LogStream;
 import io.zeebe.logstreams.storage.atomix.AtomixLogStorage;
+import io.zeebe.logstreams.storage.atomix.ZeebeIndexMapping;
+import io.zeebe.protocol.impl.encoding.BrokerInfo;
+import io.zeebe.snapshots.broker.SnapshotStoreSupplier;
 import io.zeebe.snapshots.raft.PersistedSnapshotStore;
 import io.zeebe.util.health.CriticalComponentsHealthMonitor;
 import io.zeebe.util.health.FailureListener;
@@ -43,6 +53,7 @@ import io.zeebe.util.health.HealthMonitorable;
 import io.zeebe.util.health.HealthStatus;
 import io.zeebe.util.sched.Actor;
 import io.zeebe.util.sched.ActorControl;
+import io.zeebe.util.sched.ActorScheduler;
 import io.zeebe.util.sched.AsyncClosable;
 import io.zeebe.util.sched.future.ActorFuture;
 import io.zeebe.util.sched.future.CompletableActorFuture;
@@ -56,15 +67,27 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 
-public final class ZeebePartitionRepl extends Actor
+public final class ZeebePartitionBackup extends Actor
     implements RaftRoleChangeListener, HealthMonitorable, FailureListener, DiskSpaceUsageListener {
 
   private static final Logger LOG = Loggers.SYSTEM_LOGGER;
   private static final int EXPORTER_PROCESSOR_ID = 1003;
   private static final String EXPORTER_NAME = "Exporter-%d";
 
-  private final List<ClosingStep> closingSteps = new ArrayList<>();
+  private final PartitionMessagingService messagingService;
+  private final BrokerCfg brokerCfg;
+  private final RaftPartition atomixRaftPartition;
+  private final ExporterRepository exporterRepository = new ExporterRepository();
 
+  private final ActorScheduler scheduler;
+  private final SnapshotStoreSupplier snapshotStoreSupplier;
+  private final TypedRecordProcessorsFactory typedRecordProcessorsFactory;
+  private final CommandApiService commandApiService;
+  private final List<PartitionListener> partitionListeners;
+  private final List<ClosingStep> closingSteps = new ArrayList<>();
+  private final int partitionId;
+  private final int maxFragmentSize;
+  private final BrokerInfo localBroker;
   private ActorFuture<Void> transitionFuture;
   private LogStream logStream;
   private Role raftRole;
@@ -73,6 +96,8 @@ public final class ZeebePartitionRepl extends Actor
   private ZeebeDb zeebeDb;
   private final String actorName;
   private FailureListener failureListener;
+  private final HealthMonitor criticalComponentsHealthMonitor;
+  private final ZeebeIndexMapping zeebeIndexMapping;
   private final HealthMetrics healthMetrics;
   private AtomixLogStorage atomixLogStorage;
   private long deferredCommitPosition;
@@ -84,20 +109,48 @@ public final class ZeebePartitionRepl extends Actor
   private boolean isPaused;
   private AsyncSnapshotDirector asyncSnapshotDirector;
 
-  private final ZeebePartitionState state;
-  private final PartitionTransitionBehavior transitionBehavior;
+  public ZeebePartitionBackup(
+      final BrokerInfo localBroker,
+      final RaftPartition atomixRaftPartition,
+      final List<PartitionListener> partitionListeners,
+      final PartitionMessagingService messagingService,
+      final ActorScheduler actorScheduler,
+      final BrokerCfg brokerCfg,
+      final CommandApiService commandApiService,
+      final ZeebeIndexMapping zeebeIndexMapping,
+      final SnapshotStoreSupplier snapshotStoreSupplier,
+      final TypedRecordProcessorsFactory typedRecordProcessorsFactory) {
+    this.localBroker = localBroker;
+    this.atomixRaftPartition = atomixRaftPartition;
+    this.messagingService = messagingService;
+    this.brokerCfg = brokerCfg;
+    this.snapshotStoreSupplier = snapshotStoreSupplier;
+    this.typedRecordProcessorsFactory = typedRecordProcessorsFactory;
+    this.commandApiService = commandApiService;
+    this.partitionListeners = Collections.unmodifiableList(partitionListeners);
+    partitionId = atomixRaftPartition.id().id();
+    scheduler = actorScheduler;
+    maxFragmentSize = (int) brokerCfg.getNetwork().getMaxMessageSizeInBytes();
+    this.zeebeIndexMapping = zeebeIndexMapping;
 
-  public ZeebePartitionRepl(
-      final ZeebePartitionState state, final PartitionTransitionBehavior transitionBehavior) {
-    this.state = state;
-    this.transitionBehavior = transitionBehavior;
+    final var exporterEntries = brokerCfg.getExporters().entrySet();
+    // load and validate exporters
+    for (final var exporterEntry : exporterEntries) {
+      final var id = exporterEntry.getKey();
+      final var exporterCfg = exporterEntry.getValue();
+      try {
+        exporterRepository.load(id, exporterCfg);
+      } catch (final ExporterLoadException | ExporterJarLoadException e) {
+        throw new IllegalStateException(
+            "Failed to load exporter with configuration: " + exporterCfg, e);
+      }
+    }
 
-    actorName = buildActorName(state.getNodeId(), "ZeebePartition-" + state.getPartitionId());
-    state.setComponentHealthMonitor(new CriticalComponentsHealthMonitor(actor, LOG));
-    raftPartitionHealth =
-        new RaftPartitionHealth(state.getRaftPartition(), actor, this::onRaftFailed);
-    zeebePartitionHealth = new ZeebePartitionHealth(state.getPartitionId());
-    healthMetrics = new HealthMetrics(state.getPartitionId());
+    actorName = buildActorName(localBroker.getNodeId(), "ZeebePartition-" + partitionId);
+    criticalComponentsHealthMonitor = new CriticalComponentsHealthMonitor(actor, LOG);
+    raftPartitionHealth = new RaftPartitionHealth(atomixRaftPartition, actor, this::onRaftFailed);
+    zeebePartitionHealth = new ZeebePartitionHealth(partitionId);
+    healthMetrics = new HealthMetrics(partitionId);
     healthMetrics.setUnhealthy();
     diskSpaceAvailable = true;
   }
@@ -139,7 +192,7 @@ public final class ZeebePartitionRepl extends Actor
   }
 
   private void leaderTransition(final long newTerm) {
-    onTransitionTo(transitionBehavior::transitionToLeader)
+    onTransitionTo(this::transitionToLeader)
         .onComplete(
             (success, error) -> {
               if (error == null) {
@@ -480,7 +533,7 @@ public final class ZeebePartitionRepl extends Actor
         .commandResponseWriter(commandApiService.newCommandResponseWriter())
         .onProcessedListener(commandApiService.getOnProcessedListener(partitionId))
         .streamProcessorFactory(
-            (processingContext) -> {
+            processingContext -> {
               final ActorControl actor = processingContext.getActor();
               final ZeebeState zeebeState = processingContext.getZeebeState();
               return typedRecordProcessorsFactory.createTypedStreamProcessor(

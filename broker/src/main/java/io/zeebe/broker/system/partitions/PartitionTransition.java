@@ -7,10 +7,12 @@
  */
 package io.zeebe.broker.system.partitions;
 
-import io.zeebe.util.sched.future.ActorFuture;
+import io.zeebe.util.sched.future.CompletableActorFuture;
 
-public interface PartitionTransitionBehavior {
-  ActorFuture<Void> transitionToFollower();
+public interface PartitionTransition {
+  void toFollower(CompletableActorFuture<Void> future);
 
-  ActorFuture<Void> transitionToLeader();
+  void toLeader(CompletableActorFuture<Void> future);
+
+  void toInactive(CompletableActorFuture<Void> future);
 }

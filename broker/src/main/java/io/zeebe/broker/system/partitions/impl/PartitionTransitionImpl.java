@@ -9,7 +9,7 @@ package io.zeebe.broker.system.partitions.impl;
 
 import io.zeebe.broker.Loggers;
 import io.zeebe.broker.system.partitions.Component;
-import io.zeebe.broker.system.partitions.PartitionTransitionBehavior;
+import io.zeebe.broker.system.partitions.PartitionTransition;
 import io.zeebe.broker.system.partitions.ZeebePartitionState;
 import io.zeebe.util.sched.future.ActorFuture;
 import io.zeebe.util.sched.future.CompletableActorFuture;
@@ -18,16 +18,16 @@ import java.util.Collections;
 import java.util.List;
 import org.slf4j.Logger;
 
-public class PartitionTransitionBehaviorImpl<T> implements PartitionTransitionBehavior {
+public class PartitionTransitionImpl<T> implements PartitionTransition {
 
   private static final Logger LOG = Loggers.SYSTEM_LOGGER;
 
   private final ZeebePartitionState state;
   private final List<Component<T>> leaderComponents;
   private final List<Component<T>> followerComponents;
-  private final List<Component<T>> closingSteps = new ArrayList<>();
+  private final List<Component<T>> openedComponents = new ArrayList<>();
 
-  public PartitionTransitionBehaviorImpl(
+  public PartitionTransitionImpl(
       final ZeebePartitionState state,
       final List<Component<T>> leaderComponents,
       final List<Component<T>> followerComponents) {
@@ -37,35 +37,43 @@ public class PartitionTransitionBehaviorImpl<T> implements PartitionTransitionBe
   }
 
   @Override
-  public ActorFuture<Void> transitionToFollower() {
-
-    final CompletableActorFuture<Void> future = new CompletableActorFuture<>();
+  public void toFollower(final CompletableActorFuture<Void> future) {
     closePartition()
         .onComplete(
             (nothing, err) -> {
               if (err == null) {
-                final List<Component<T>> copy = new ArrayList<>(followerComponents);
-                installComponents(future, copy);
+                installComponents(future, new ArrayList<>(followerComponents));
+              } else {
+                future.completeExceptionally(err);
               }
             });
-
-    return future;
   }
 
   @Override
-  public ActorFuture<Void> transitionToLeader() {
-    final CompletableActorFuture<Void> future = new CompletableActorFuture<>();
+  public void toLeader(final CompletableActorFuture<Void> future) {
     closePartition()
         .onComplete(
             (nothing, err) -> {
               // TODO(miguel): try to stay as follower?
               if (err == null) {
-                final List<Component<T>> copy = new ArrayList<>(leaderComponents);
-                installComponents(future, copy);
+                installComponents(future, new ArrayList<>(leaderComponents));
+              } else {
+                future.completeExceptionally(err);
               }
             });
+  }
 
-    return future;
+  @Override
+  public void toInactive(final CompletableActorFuture<Void> future) {
+    closePartition()
+        .onComplete(
+            (nothing, err) -> {
+              if (err == null) {
+                future.complete(null);
+              } else {
+                future.completeExceptionally(err);
+              }
+            });
   }
 
   private void installComponents(
@@ -76,15 +84,19 @@ public class PartitionTransitionBehaviorImpl<T> implements PartitionTransitionBe
     }
 
     final Component<T> component = components.remove(0);
-    final ActorFuture<T> open = component.open(state);
-    open.onComplete(
-        (value, err) -> {
-          if (err != null) {
-            LOG.debug("Expected to open component '{}' but failed with", component.getName(), err);
-          } else {
-            component.onOpen(state, value);
-          }
-        });
+    component
+        .open(state)
+        .onComplete(
+            (value, err) -> {
+              if (err != null) {
+                LOG.debug(
+                    "Expected to open component '{}' but failed with", component.getName(), err);
+              } else {
+                component.onOpen(state, value);
+                openedComponents.add(component);
+                installComponents(future, components);
+              }
+            });
   }
 
   private CompletableActorFuture<Void> closePartition() {
@@ -92,10 +104,10 @@ public class PartitionTransitionBehaviorImpl<T> implements PartitionTransitionBe
     // - first, it is called by one of the transitionTo...() methods
     // - then it is called by onActorClosing()
     // TODO(miguel): this breaks the abstraction - why is it necessary?
-    state.setStreamProcessor(null);
-    state.setSnapshotDirector(null);
+    //    state.setStreamProcessor(null);
+    //    state.setSnapshotDirector(null);
 
-    final var closingStepsInReverseOrder = new ArrayList<>(closingSteps);
+    final var closingStepsInReverseOrder = new ArrayList<>(openedComponents);
     Collections.reverse(closingStepsInReverseOrder);
 
     final var closingPartitionFuture = new CompletableActorFuture<Void>();
@@ -124,7 +136,7 @@ public class PartitionTransitionBehaviorImpl<T> implements PartitionTransitionBe
                 component.getName());
 
             // remove the completed step from the list in case that the closing is interrupted
-            closingSteps.remove(component);
+            openedComponents.remove(component);
 
             // closing the remaining steps
             stepByStepClosing(closingFuture, actorsToClose);

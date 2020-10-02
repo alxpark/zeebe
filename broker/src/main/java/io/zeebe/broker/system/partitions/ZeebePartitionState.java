@@ -104,6 +104,10 @@ public class ZeebePartitionState {
     }
   }
 
+  public boolean shouldPauseProcessing() {
+    return !isDiskSpaceAvailable() || isProcessingPaused();
+  }
+
   public ExporterDirector getExporterDirector() {
     return exporterDirector;
   }
