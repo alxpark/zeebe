@@ -65,7 +65,7 @@ public class JournalSegment<E> implements AutoCloseable {
     this.namespace = namespace;
     writer =
         new MappableJournalSegmentWriter<>(
-            openChannel(file.file()), this, maxEntrySize, index, namespace);
+            openChannel(file.file()), this, maxEntrySize, index, namespace, storageLevel);
   }
 
   private FileChannel openChannel(final File file) {
@@ -164,14 +164,14 @@ public class JournalSegment<E> implements AutoCloseable {
   /** Acquires a reference to the log segment. */
   void acquire() {
     if (references.getAndIncrement() == 0 && open) {
-      map();
+      //      map();
     }
   }
 
   /** Releases a reference to the log segment. */
   void release() {
     if (references.decrementAndGet() == 0 && open) {
-      unmap();
+      //      unmap();
     }
   }
 
@@ -242,9 +242,8 @@ public class JournalSegment<E> implements AutoCloseable {
   /** Closes the segment. */
   @Override
   public void close() {
-    unmap();
     writer.close();
-    readers.forEach(reader -> reader.close());
+    readers.forEach(MappableJournalSegmentReader::close);
     open = false;
   }
 
