@@ -65,7 +65,7 @@ public class JournalSegment<E> implements AutoCloseable {
     this.namespace = namespace;
     writer =
         new MappableJournalSegmentWriter<>(
-            openChannel(file.file()), this, maxEntrySize, index, namespace, storageLevel);
+            openChannel(file.file()), this, maxEntrySize, index, namespace);
   }
 
   private FileChannel openChannel(final File file) {
@@ -255,7 +255,6 @@ public class JournalSegment<E> implements AutoCloseable {
   /** Deletes the segment. */
   public void delete() {
     try {
-      unmap();
       Files.deleteIfExists(file.file().toPath());
     } catch (final IOException e) {
       throw new StorageException(e);

@@ -109,7 +109,6 @@ public class SegmentedJournalWriter<E> implements JournalWriter<E> {
           // Delete all segments with first indexes greater than the given index.
           while (index < currentSegment.index() && currentSegment != journal.getFirstSegment()) {
             currentSegment.release();
-            currentSegment.unmap();
             journal.removeSegment(currentSegment);
             currentSegment = journal.getLastSegment();
             currentSegment.acquire();
