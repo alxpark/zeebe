@@ -17,6 +17,7 @@
 package io.atomix.storage.journal;
 
 import io.atomix.storage.StorageException;
+import io.atomix.storage.StorageLevel;
 import io.atomix.storage.journal.index.JournalIndex;
 import io.atomix.utils.serializer.Namespace;
 import java.io.IOException;
@@ -38,14 +39,28 @@ class MappableJournalSegmentWriter<E> implements JournalWriter<E> {
       final JournalSegment<E> segment,
       final int maxEntrySize,
       final JournalIndex index,
-      final Namespace namespace) {
+      final Namespace namespace,
+      final StorageLevel storageLevel) {
     this.channel = channel;
     this.segment = segment;
     this.maxEntrySize = maxEntrySize;
     this.index = index;
     this.namespace = namespace;
-    writer =
-        new FileChannelJournalSegmentWriter<>(channel, segment, maxEntrySize, index, namespace);
+
+    // todo: move this logic out of this constructor
+    if (storageLevel == StorageLevel.MAPPED) {
+      final MappedByteBuffer buffer;
+      try {
+        buffer =
+            channel.map(FileChannel.MapMode.READ_WRITE, 0, segment.descriptor().maxSegmentSize());
+      } catch (final IOException e) {
+        throw new StorageException(e);
+      }
+      writer = new MappedJournalSegmentWriter<>(buffer, segment, maxEntrySize, index, namespace);
+    } else {
+      writer =
+          new FileChannelJournalSegmentWriter<>(channel, segment, maxEntrySize, index, namespace);
+    }
   }
 
   /**

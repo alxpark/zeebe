@@ -33,7 +33,6 @@ class MappableJournalSegmentReader<E> implements JournalReader<E> {
   private final JournalIndex index;
   private final Namespace namespace;
   private JournalReader<E> reader;
-  private final int maxSegmentSize;
 
   MappableJournalSegmentReader(
       final FileChannel channel,
@@ -41,20 +40,18 @@ class MappableJournalSegmentReader<E> implements JournalReader<E> {
       final int maxEntrySize,
       final JournalIndex index,
       final Namespace namespace,
-      final StorageLevel storageLevel,
-      final int maxSegmentSize) {
+      final StorageLevel storageLevel) {
     this.channel = channel;
     this.segment = segment;
     this.maxEntrySize = maxEntrySize;
     this.index = index;
     this.namespace = namespace;
-    this.maxSegmentSize = maxSegmentSize;
 
     // todo: move this logic out of this constructor
     if (storageLevel == StorageLevel.MAPPED) {
       final MappedByteBuffer buffer;
       try {
-        buffer = channel.map(MapMode.READ_ONLY, 0, maxSegmentSize);
+        buffer = channel.map(MapMode.READ_ONLY, 0, segment.descriptor().maxSegmentSize());
       } catch (final IOException e) {
         throw new StorageException(e);
       }
@@ -70,7 +67,7 @@ class MappableJournalSegmentReader<E> implements JournalReader<E> {
     if (!(reader instanceof MappedJournalSegmentReader)) {
       final MappedByteBuffer buffer;
       try {
-        buffer = channel.map(MapMode.READ_ONLY, 0, maxSegmentSize);
+        buffer = channel.map(MapMode.READ_ONLY, 0, segment.descriptor().maxSegmentSize());
       } catch (final IOException e) {
         throw new StorageException(e);
       }
