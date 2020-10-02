@@ -24,6 +24,7 @@ import io.atomix.utils.serializer.Namespace;
 import java.io.IOException;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
+import java.nio.MappedByteBuffer;
 import java.util.NoSuchElementException;
 import java.util.zip.CRC32;
 
@@ -33,7 +34,7 @@ import java.util.zip.CRC32;
  * @author <a href="http://github.com/kuujo">Jordan Halterman</a>
  */
 class MappedJournalSegmentReader<E> implements JournalReader<E> {
-  private final ByteBuffer buffer;
+  private final MappedByteBuffer buffer;
   private final int maxEntrySize;
   private final JournalIndex index;
   private final Namespace namespace;
@@ -42,12 +43,12 @@ class MappedJournalSegmentReader<E> implements JournalReader<E> {
   private Indexed<E> nextEntry;
 
   MappedJournalSegmentReader(
-      final ByteBuffer buffer,
+      final MappedByteBuffer buffer,
       final JournalSegment<E> segment,
       final int maxEntrySize,
       final JournalIndex index,
       final Namespace namespace) {
-    this.buffer = buffer.slice();
+    this.buffer = buffer;
     this.maxEntrySize = maxEntrySize;
     this.index = index;
     this.namespace = namespace;
